@@ -129,11 +129,6 @@
 </p>
 <p align="center"><em>Lịch sử nhập/xuất thuốc & vật tư</em></p>
 
-<p align="center">
-  <img src="docs/project photo/6..jpg" width="400"/>
-</p>
-<p align="center"><em>AI trả lời truy vấn y tế (ví dụ: “ốm cúm uống thuốc gì?”)</em></p>
-
 ---
 
 ## ⚙️ 5. Hướng dẫn cài đặt và chạy ứng dụng
