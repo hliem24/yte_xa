@@ -36,6 +36,51 @@ String? _requireNonEmpty(String v, String label) =>
 String? _requirePositive(int n, String label) =>
     n <= 0 ? '$label phải > 0.' : null;
 
+/// ---------- Resolver mã thuốc ----------
+String _norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+String? _resolveMedicineId(WidgetRef ref, String raw) {
+  final inv  = ref.read(inventoryProvider);
+  final meds = inv.medicines;
+  if (meds.isEmpty) return null;
+
+  final want = _norm(raw);
+  // 1) Khớp ID exact
+  final exact = meds.where((m) => m.id.toLowerCase() == raw.toLowerCase());
+  if (exact.isNotEmpty) return exact.first.id;
+
+  // 2) Khớp ID bắt đầu (PARA -> PARA500)
+  final prefix = meds.where((m) => m.id.toLowerCase().startsWith(raw.toLowerCase()));
+  if (prefix.isNotEmpty) return prefix.first.id;
+
+  // 3) Khớp theo tên chứa (paracetamol -> PARA500)
+  final byName = meds.where((m) => _norm(m.name).contains(want));
+  if (byName.isNotEmpty) return byName.first.id;
+
+  return null;
+}
+
+/// Cho phép UI kiểm tra trước khi thực thi (và để lọc rác từ model)
+bool validateActionAgainstState(WidgetRef ref, AgentAction a) {
+  final inv = ref.read(inventoryProvider);
+  bool okId(String id) => inv.medicines.any((m) => m.id.toLowerCase() == id.toLowerCase());
+
+  if (a is StockInRequestAction) {
+    return a.qty > 0 && _resolveMedicineId(ref, a.medicineId) != null;
+  }
+  if (a is StockOut) {
+    final real = _resolveMedicineId(ref, a.medicineId);
+    return a.qty > 0 && real != null;
+  }
+  if (a is ApproveRequestAction) {
+    return a.requestId.trim().isNotEmpty; // còn kiểm tra sâu khi reviewRequest
+  }
+  if (a is CreateMedicine) {
+    return a.id.isNotEmpty && a.name.isNotEmpty && a.unit.isNotEmpty;
+  }
+  if (a is QuickReport) return true;
+  return false;
+}
+
 /// ---------- Execute ----------
 Future<String> executeAction(WidgetRef ref, AgentAction action) async {
   const wh = 'KHO_1';
@@ -48,23 +93,31 @@ Future<String> executeAction(WidgetRef ref, AgentAction action) async {
     final qtyErr = _requirePositive(action.qty, 'Số lượng (qty)');
     if (idErr != null || qtyErr != null) {
       return '⚠️ ${[idErr, qtyErr].whereType<String>().join(" ")}\n'
-             'Gửi lại: `wms { "type":"stockInRequest", "params":{"medicineId":"PARA500","qty":10,"note":"..."} }` '
-             'hoặc nhắn: `nhập PARA500 10 ghichu viện trợ` / `nhập 10 PARA500 ghichu viện trợ`.';
+             'Ví dụ: `wms { "type":"stockInRequest", "params":{"medicineId":"PARA500","qty":10,"note":"..."} }`.';
     }
+
+    final resolved = _resolveMedicineId(ref, action.medicineId);
+    if (resolved == null) {
+      return '⚠️ Không tìm thấy mã **${action.medicineId}** trong kho. Bạn có thể gõ đúng mã (ví dụ: PARA500) hoặc tên gần đúng (Paracetamol).';
+    }
+
     final id = await ref.read(inventoryProvider.notifier).createStockInRequest(
-      medicineId: action.medicineId,
+      medicineId: resolved,
       qty: action.qty,
       note: action.note ?? '',
       requester: user?.username ?? 'unknown',
     );
-    return '📝 Đã tạo **phiếu yêu cầu nhập** (#$id) cho ${action.medicineId} số lượng ${action.qty}. Chờ admin duyệt.';
+    final suffix = resolved.toUpperCase() == action.medicineId.toUpperCase()
+        ? ''
+        : ' (đã map từ "${action.medicineId}" → "$resolved")';
+    return '📝 Đã tạo **phiếu yêu cầu nhập** (#$id) cho $resolved số lượng ${action.qty}.$suffix Chờ admin duyệt.';
   }
 
   if (action is ApproveRequestAction) {
     if (role != 'admin') return '⛔ Chỉ admin mới được duyệt yêu cầu.';
     final idErr = _requireNonEmpty(action.requestId, 'mã phiếu (requestId)');
     if (idErr != null) {
-      return '⚠️ $idErr Gửi lại: `wms { "type":"approveRequest", "params":{"requestId":"RQ-...","approve":true,"note":"..."} }`.';
+      return '⚠️ $idErr Ví dụ: `wms { "type":"approveRequest", "params":{"requestId":"RQ-...","approve":true} }`.';
     }
     final ok = await ref.read(inventoryProvider.notifier).reviewRequest(
       requestId: action.requestId,
@@ -83,14 +136,22 @@ Future<String> executeAction(WidgetRef ref, AgentAction action) async {
     final qtyErr = _requirePositive(action.qty, 'Số lượng (qty)');
     if (idErr != null || qtyErr != null) {
       return '⚠️ ${[idErr, qtyErr].whereType<String>().join(" ")}\n'
-             'Gửi lại: `wms { "type":"stockOut", "params":{"medicineId":"PARA500","qty":5,"reason":"cấp phát"} }` '
-             'hoặc nhắn: `xuất PARA500 5 lydo cấp phát`.';
+             'Ví dụ: `wms { "type":"stockOut", "params":{"medicineId":"PARA500","qty":5,"reason":"cấp phát"} }`.';
     }
+
+    final resolved = _resolveMedicineId(ref, action.medicineId);
+    if (resolved == null) {
+      return '⚠️ Không tìm thấy mã **${action.medicineId}** trong kho. Vui lòng cung cấp mã đúng.';
+    }
+
     await ref.read(inventoryProvider.notifier)
-        .addMovement(action.medicineId, wh, 'out', action.qty, reason: action.reason);
+        .addMovement(resolved, wh, 'out', action.qty, reason: action.reason);
     final reasonStr = (action.reason != null && action.reason!.isNotEmpty)
         ? ' • Lý do: ${action.reason}' : '';
-    return '✅ Đã **xuất** ${action.qty} từ ${action.medicineId}$reasonStr.';
+    final suffix = resolved.toUpperCase() == action.medicineId.toUpperCase()
+        ? ''
+        : ' (đã map từ "${action.medicineId}" → "$resolved")';
+    return '✅ Đã **xuất** ${action.qty} từ $resolved$reasonStr.$suffix';
   }
 
   if (action is CreateMedicine) {
@@ -99,7 +160,7 @@ Future<String> executeAction(WidgetRef ref, AgentAction action) async {
     final unitErr = _requireNonEmpty(action.unit, 'đơn vị');
     if (idErr != null || nameErr != null || unitErr != null) {
       return '⚠️ ${[idErr, nameErr, unitErr].whereType<String>().join(" ")}\n'
-             'Gửi lại: `wms { "type":"createMedicine", "params":{"id":"ZINC50","name":"Kẽm 50mg","unit":"vỉ"} }`.';
+             'Ví dụ: `wms { "type":"createMedicine", "params":{"id":"ZINC50","name":"Kẽm 50mg","unit":"vỉ"} }`.';
     }
     final inv = ref.read(inventoryProvider);
     final exists = inv.medicines.any((m) => m.id.toUpperCase() == action.id.toUpperCase());
@@ -141,7 +202,7 @@ String _quickReportText(WidgetRef ref) {
   return b.toString();
 }
 
-/// ---------- Natural-language parser ----------
+/// ---------- NL parser ----------
 AgentAction? parseVietnameseFreeText(String s) {
   final text = s.toLowerCase().trim();
 
@@ -149,7 +210,7 @@ AgentAction? parseVietnameseFreeText(String s) {
     return const QuickReport();
   }
 
-  // nhập: hỗ trợ 2 thứ tự
+  // nhập: 2 thứ tự
   final inA = RegExp(r'(nhap|nhập)\s+([a-z0-9_]+)\s+(\d+)(?:\s+ghichu\s+(.+))?').firstMatch(text);
   if (inA != null) {
     final id  = inA.group(2)!.toUpperCase();
@@ -188,34 +249,19 @@ AgentAction? parseVietnameseFreeText(String s) {
   return null;
 }
 
-/// ---------- Robust extractor ----------
-AgentAction? extractActionFromAssistant(String answer) {
-  // 1) Tìm sau chữ "wms" (không phân biệt hoa/thường)
-  final tag = RegExp(r'wms\b', caseSensitive: false);
-  final tagMatch = tag.firstMatch(answer);
-  if (tagMatch != null) {
-    final after = answer.substring(tagMatch.end);
-    // bắt khối ``` ... ``` hoặc { ... }
-    final fenced = RegExp(r'```(?:json|js|)\s*({[\s\S]*?})\s*```', dotAll: true)
-        .firstMatch(after);
-    if (fenced != null) {
-      final obj = fenced.group(1)!;
-      final a = _fromJsonSafe(obj);
-      if (a != null) return a;
-    }
-    final brace = RegExp(r'({[\s\S]*?})', dotAll: true).firstMatch(after);
-    if (brace != null) {
-      final obj = brace.group(1)!;
-      final a = _fromJsonSafe(obj);
-      if (a != null) return a;
-    }
-  }
+/// ---------- Extractors ----------
+AgentAction? extractActionFromAssistantStrict(String answer) {
+  // Chỉ chấp nhận khi có `wms` rồi mới tìm JSON
+  final tag = RegExp(r'wms\b', caseSensitive: false).firstMatch(answer);
+  if (tag == null) return null;
 
-  // 2) Không có 'wms': quét tất cả JSON trong câu
-  for (final m in RegExp(r'({[\s\S]*?})', dotAll: true).allMatches(answer)) {
-    final a = _fromJsonSafe(m.group(1)!);
-    if (a != null) return a;
-  }
+  final after = answer.substring(tag.end);
+  final fenced = RegExp(r'```(?:json|js|)\s*({[\s\S]*?})\s*```', dotAll: true).firstMatch(after);
+  if (fenced != null) return _fromJsonSafe(fenced.group(1)!);
+
+  final brace = RegExp(r'({[\s\S]*?})', dotAll: true).firstMatch(after);
+  if (brace != null) return _fromJsonSafe(brace.group(1)!);
+
   return null;
 }
 
@@ -254,7 +300,7 @@ AgentAction? _fromJsonSafe(String jsonStr) {
       case 'quickReport':
         return const QuickReport();
 
-      // tương thích ngược
+      // tương thích ngược (model cũ)
       case 'stockIn':
         return StockInRequestAction(
           medicineId: (params['medicineId'] ?? '').toString().toUpperCase(),

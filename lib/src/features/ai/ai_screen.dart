@@ -1,8 +1,10 @@
+import 'dart:convert' as convert; // ✅ cần cho jsonDecode và JsonEncoder
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wms_yte_xa_ai/src/services/openai_client.dart';
 import 'package:wms_yte_xa_ai/src/services/agent_actions.dart' as acts;
 import '../../widgets/app_header.dart';
+import '../../state.dart';
 
 class AiScreen extends ConsumerStatefulWidget {
   const AiScreen({super.key});
@@ -11,10 +13,14 @@ class AiScreen extends ConsumerStatefulWidget {
 }
 
 class _Msg {
-  final String role;
+  final String role; // 'user' | 'assistant'
   final String content;
   final acts.AgentAction? embeddedAction;
-  _Msg(this.role, this.content, {this.embeddedAction});
+  final String? embeddedRawJson; // hiển thị wms {…}
+  _Msg(this.role, this.content, {this.embeddedAction, this.embeddedRawJson});
+
+  Map<String, String> toMap() => {'role': role, 'content': content};
+  static _Msg fromMap(Map j) => _Msg(j['role'] as String, j['content'] as String);
 }
 
 class _AiScreenState extends ConsumerState<AiScreen> {
@@ -22,46 +28,88 @@ class _AiScreenState extends ConsumerState<AiScreen> {
   final _listCtrl = ScrollController();
   bool _busy = false;
 
-  /// Prompt chuẩn hoá theo schema mới (nhập cần duyệt)
-  static const String _systemPrompt = '''
-Bạn là trợ lý AI tiếng Việt cho **quản lý kho 1 kho**.
-Trả lời tự nhiên. Chỉ khi cần thao tác kho thì chèn đúng **một** khối:
+  static const String _baseSystemPrompt = '''
+Bạn là trợ lý AI tiếng Việt cho **quản lý kho (1 kho)**.
+- TRẢ LỜI TỰ NHIÊN cho câu hỏi y tế/kiến thức chung.
+- CHỈ sinh đúng **một** khối `wms { "type":..., "params":{...} }` khi người dùng thực sự yêu cầu thao tác kho.
+- Nếu thiếu tham số, hãy hỏi lại; không sinh wms.
 
-wms {
-  "type": "<action>",
-  "params": { ... }
-}
-
-Các action HỢP LỆ:
-
-1) stockInRequest { "medicineId": "PARA500", "qty": 30, "note": "viện trợ" }
-   → Nhân viên tạo **phiếu nhập** chờ duyệt.
-
-2) approveRequest { "requestId": "123", "approve": true, "note": "ok" }
-   → Quản trị **duyệt** (approve=false = từ chối).
-
-3) stockOut { "medicineId": "PARA500", "qty": 5, "reason": "cấp phát" }
-   → **Xuất kho** trực tiếp (không cần duyệt).
-
-4) createMedicine { "id": "ZINC50", "name": "Kẽm 50mg", "unit": "vỉ" }
-
+Các action hợp lệ:
+1) stockInRequest { "medicineId":"PARA500", "qty":30, "note":"..." }
+2) approveRequest { "requestId":"RQ-...", "approve":true, "note":"..." }
+3) stockOut { "medicineId":"PARA500", "qty":5, "reason":"..." }
+4) createMedicine { "id":"ZINC50","name":"Kẽm 50mg","unit":"vỉ" }
 5) quickReport { }
-   → Báo cáo nhanh (tổng tồn, sắp hết hạn, tồn thấp).
-
-❗ Không dùng type khác ngoài danh sách trên. Nếu không thao tác kho, hãy trả lời ngắn gọn.
 ''';
 
-  final List<_Msg> _history = [_Msg('system', _systemPrompt)];
+  final List<_Msg> _history = [];
 
-  // Ollama (Android emulator → 10.0.2.2)
   late final OpenAiClient _client =
       OpenAiClient(baseUrl: 'http://10.0.2.2:11434', model: 'llama3.2');
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreHistory();
+  }
+
+  Future<void> _restoreHistory() async {
+    final repo = ref.read(storageProvider);
+    final saved = await repo.loadAiHistory();
+    setState(() {
+      _history
+        ..clear()
+        ..addAll(saved.map(_Msg.fromMap));
+    });
+  }
+
+  Future<void> _persistHistory() async {
+    final repo = ref.read(storageProvider);
+    await repo.saveAiHistory(_history.map((m) => m.toMap()).toList());
+  }
+
+  String _buildRealtimeContext() {
+    final inv = ref.read(inventoryProvider);
+    final auth = ref.read(authProvider);
+    final user = auth is Authenticated ? auth.user : null;
+    final role = user?.role ?? 'staff';
+
+    final total = inv.medicines.fold<int>(0, (s, m) => s + m.totalQuantity);
+    final pending = inv.requests.where((r) => r.status == 'pending').length;
+
+    final meds = inv.medicines.take(80).map((m) {
+      final days = m.nearestExpiry?.difference(DateTime.now()).inDays;
+      return {
+        'id': m.id,
+        'name': m.name,
+        'unit': m.unit,
+        'total': m.totalQuantity,
+        'nearestExpiryDays': days,
+      };
+    }).toList();
+
+    return '''
+# Context (Realtime)
+userRole: $role
+totalStock: $total
+pendingRequests: $pending
+knownMedicines: ${meds.toString()}
+(Chỉ sinh wms cho thao tác kho.)
+''';
+  }
+
+  bool _looksLikeWarehouseIntent(String userText, String llmAnswer) {
+    final t = '$userText $llmAnswer'.toLowerCase();
+    return RegExp(
+      r'(nhap|nhập|xuat|xuất|kho|tồn|báo cáo|bao cao|phiếu|approve|request|stock|quickreport)',
+    ).hasMatch(t);
+  }
 
   Future<void> _ask(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty || _busy) return;
 
-    // 1) Parser nội bộ → thực thi ngay
+    // 1️⃣ Parser nội bộ → thực thi nhanh
     final natural = acts.parseVietnameseFreeText(trimmed);
     if (natural != null) {
       final res = await acts.executeAction(ref, natural);
@@ -70,11 +118,12 @@ Các action HỢP LỆ:
         _history.add(_Msg('assistant', res));
         _input.clear();
       });
+      await _persistHistory();
       _scroll();
       return;
     }
 
-    // 2) Gọi LLM
+    // 2️⃣ Gọi LLM
     setState(() {
       _busy = true;
       _history.add(_Msg('user', trimmed));
@@ -82,20 +131,29 @@ Các action HỢP LỆ:
     });
     _scroll();
 
+    final sys = '$_baseSystemPrompt\n${_buildRealtimeContext()}';
     final msgs = <Map<String, String>>[
-      {'role': 'system', 'content': _systemPrompt},
-      ..._history
-          .where((m) => m.role != 'system')
-          .map((m) => {'role': m.role, 'content': m.content}),
+      {'role': 'system', 'content': sys},
+      ..._history.map((m) => {'role': m.role, 'content': m.content}),
     ];
 
     final answer = await _client.chatWithMessages(msgs);
-    final act = acts.extractActionFromAssistant(answer);
 
-    if (act != null) {
+    // Trích wms
+    final act = acts.extractActionFromAssistantStrict(answer);
+
+    if (act != null &&
+        _looksLikeWarehouseIntent(trimmed, answer) &&
+        acts.validateActionAgainstState(ref, act)) {
       final res = await acts.executeAction(ref, act);
+
+      final rawMatch = RegExp(r'({[\s\S]*?})', dotAll: true).firstMatch(answer);
+      final rawJson = rawMatch?.group(1);
+
       setState(() {
-        _history.add(_Msg('assistant', '$answer\n\n✅ $res', embeddedAction: act));
+        _history.add(_Msg('assistant', rawJson ?? answer,
+            embeddedAction: act, embeddedRawJson: rawJson));
+        _history.add(_Msg('assistant', '✅ $res'));
         _busy = false;
       });
     } else {
@@ -104,6 +162,7 @@ Các action HỢP LỆ:
         _busy = false;
       });
     }
+    await _persistHistory();
     _scroll();
   }
 
@@ -135,8 +194,9 @@ Các action HỢP LỆ:
               itemCount: _history.length,
               itemBuilder: (_, i) {
                 final m = _history[i];
-                if (m.role == 'system') return const SizedBox.shrink();
                 final isUser = m.role == 'user';
+                final isCode = m.embeddedRawJson != null;
+
                 return Column(
                   crossAxisAlignment:
                       isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -146,11 +206,16 @@ Các action HỢP LỆ:
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       constraints: const BoxConstraints(maxWidth: 620),
                       decoration: BoxDecoration(
-                        color: isUser ? cs.primary.withValues(alpha: .12)
-                                      : cs.surfaceContainerHighest,
+                        color: isUser
+                            ? cs.primary.withValues(alpha: .12)
+                            : (isCode
+                                ? const Color(0xFF1C2240)
+                                : cs.surfaceContainerHighest),
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Text(m.content, style: const TextStyle(fontSize: 15)),
+                      child: isCode
+                          ? _CodeBubble(jsonText: m.embeddedRawJson!)
+                          : Text(m.content, style: const TextStyle(fontSize: 15)),
                     ),
                   ],
                 );
@@ -160,7 +225,6 @@ Các action HỢP LỆ:
 
           const Divider(height: 1),
 
-          // Ô nhập + Gửi (khung giống nút gửi)
           SafeArea(
             top: false,
             child: Padding(
@@ -182,7 +246,7 @@ Các action HỢP LỆ:
                         maxLines: 3,
                         textAlignVertical: TextAlignVertical.center,
                         decoration: const InputDecoration(
-                          hintText: '',
+                          hintText: 'Nhập câu hỏi hoặc lệnh…',
                           border: InputBorder.none,
                           isDense: true,
                           contentPadding: EdgeInsets.zero,
@@ -195,9 +259,8 @@ Các action HỢP LỆ:
                   FilledButton.icon(
                     style: FilledButton.styleFrom(
                       minimumSize: const Size(80, 44),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
+                      shape:
+                          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
                     onPressed: _busy ? null : () => _ask(_input.text),
                     icon: const Icon(Icons.send),
@@ -210,5 +273,33 @@ Các action HỢP LỆ:
         ],
       ),
     );
+  }
+}
+
+/// Hiển thị khối JSON dạng code bubble (màu tối, monospace)
+class _CodeBubble extends StatelessWidget {
+  final String jsonText;
+  const _CodeBubble({required this.jsonText});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      'wms ${_pretty(jsonText)}',
+      style: const TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 13.5,
+        height: 1.35,
+        color: Colors.white,
+      ),
+    );
+  }
+
+  static String _pretty(String s) {
+    try {
+      final obj = convert.jsonDecode(s);
+      return const convert.JsonEncoder.withIndent('  ').convert(obj);
+    } catch (_) {
+      return s;
+    }
   }
 }
