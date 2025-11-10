@@ -3,13 +3,15 @@
     🎓 Faculty of Information Technology (DaiNam University)
     </a>
 </h2>
+
 <h2 align="center">
-   ỨNG DỤNG TRẮC NHIỆM TRỰC TUYẾN 
+   ỨNG DỤNG QUẢN LÝ KHO Y TẾ XÃ (WMS_YTE_XA_AI)
 </h2>
+
 <div align="center">
     <p align="center">
         <img src="docs/aiotlab_logo.png" alt="AIoTLab Logo" width="170"/>
-        <img src="docs/fitdnu_logo.png" alt="AIoTLab Logo" width="180"/>
+        <img src="docs/fitdnu_logo.png" alt="FIT DNU Logo" width="180"/>
         <img src="docs/dnu_logo.png" alt="DaiNam University Logo" width="200"/>
     </p>
 
@@ -19,172 +21,218 @@
 
 </div>
 
-/*
-## 📖 1. Giới thiệu hệ thống
-Ứng dụng **trắc nghiệm Client–Server** sử dụng **TCP** cho phép nhiều người dùng làm bài trắc nghiệm qua mạng theo thời gian thực.
+---
 
-- **Server**: trung tâm xác thực tài khoản, cung cấp danh mục bộ đề, phát câu hỏi, chấm điểm và lưu kết quả.
-- **Client (Java Swing)**: giao diện để **đăng ký/đăng nhập**, **chọn bộ đề**, **làm bài** (đồng hồ đếm ngược, thanh tiến độ, điều hướng Trước/Tiếp/Nộp), xem **tổng kết** và **lịch sử**.
-- **Lưu trữ dạng tệp** (không dùng DB) để triển khai đơn giản:
-  - `users.csv`: tài khoản (username, password_hash SHA-256, created_at).
-  - `questions/<type>/<set>.csv` + `<set>.cfg`: ngân hàng câu hỏi & thời lượng đề.
-  - `results.csv`: lịch sử kết quả thi (điểm, thời gian, bộ đề, IP…).
+## 📘 1. Giới thiệu hệ thống
 
-**Các chức năng chính:**
-1) **Kết nối & xác thực**: Client kết nối Server qua IP/port (mặc định **5555**). Hỗ trợ nhiều Client đồng thời (đa luồng). Pha AUTH với 2 chế độ: `LOGIN` / `REGISTER` (mật khẩu băm SHA-256 trước khi gửi).
-2) **Chọn bộ đề**: Server gửi **catalog** (Loại → Bộ đề). Client chọn loại/bộ đề qua hộp thoại “card style”.
-3) **Phát câu hỏi & làm bài**: Server gửi lần lượt đối tượng `Question`. Client chọn đáp án **0..3** (A..D) rồi gửi về; Server trả kết quả **đúng/sai** theo thời gian thực. Thời lượng **đếm ngược toàn bài** lấy từ tệp `.cfg` (ví dụ `seconds=600`).
-4) **Nộp bài / Hết giờ**: Người dùng có thể nộp sớm; hết giờ hệ thống tự nộp phần còn lại. Server trả `RESULT|username|correct/total` và ghi một dòng vào `results.csv`.
-5) **Xem kết quả**: Client có trình xem `results.csv` (bảng lịch sử), giao diện đồng nhất với ứng dụng.
+**WMS_YTE_XA_AI** là ứng dụng di động quản lý kho thuốc & vật tư y tế tại các **trạm y tế xã**, được xây dựng bằng **Flutter (Material 3, Riverpod)**.  
+Ứng dụng cho phép cán bộ y tế, nhân viên và quản trị viên theo dõi, nhập – xuất – tồn kho **trực quan, chính xác và có tích hợp AI hỗ trợ thông minh**.
+
+### ⚙️ Thành phần hệ thống
+
+- **Người dùng (Staff/Admin):**
+  - Đăng nhập, đăng xuất bằng tài khoản phân quyền.
+  - Nhân viên gửi yêu cầu nhập kho; quản trị viên duyệt và ghi nhận.
+  - Thực hiện xuất kho có lý do cụ thể, theo quy định.
+  - Xem tồn kho hiện tại, thống kê thuốc sắp hết hạn, thuốc tồn thấp.
+
+- **AI Trợ lý thông minh (AI Agent):**
+  - Phân tích dữ liệu kho và trả lời truy vấn như:
+    - “Tổng tồn kho hiện tại là bao nhiêu?”
+    - “Nhập 10 hộp PARA500”
+    - “Cho tôi xem thuốc sắp hết hạn”
+  - Tích hợp mô hình **Ollama Llama3.2** qua gateway nội bộ (http://10.0.2.2:11434).
+  - Có thể trả lời **câu hỏi y tế thường gặp** (ví dụ: “bị cúm nên uống thuốc gì?”) một cách tự nhiên, nhưng **không thay thế tư vấn y tế**.
+
+- **Lưu trữ cục bộ:**
+  - `SharedPreferences` lưu dữ liệu JSON:
+    - Danh mục thuốc (`medicines`)
+    - Lịch sử nhập xuất (`movements`)
+    - Phiếu yêu cầu (`requests`)
+    - Người dùng đăng nhập (`user`)
+  - Dữ liệu được nạp lại khi khởi động ứng dụng, đảm bảo **offline-first**.
 
 ---
 
-## 🔧 2. Công nghệ sử dụng
+## 🧩 2. Công nghệ sử dụng
 
-#### Java Core & Multithreading
-#### Java Swing
-#### Java Sockets
-#### Hỗ trợ
-- `MessageDigest` (SHA-256) để băm mật khẩu phía Client trước khi gửi.
-- `SimpleDateFormat`/`LocalDateTime` để đóng dấu thời gian.
-- `Collections`/`ArrayList` quản lý danh mục bộ đề, lịch sử câu hỏi/đáp án phía Client.
+| Thành phần | Công nghệ |
+|-------------|------------|
+| **Ngôn ngữ** | Dart |
+| **Framework** | Flutter (Material 3) |
+| **State Management** | Riverpod |
+| **Local Storage** | SharedPreferences |
+| **AI Integration** | OpenAI / Ollama local gateway |
+| **Architecture** | MVVM (Models – State – Features – Widgets) |
+| **Giao diện** | Material 3, dark/light theme tự động |
 
-*/
+---
 
+## 🚀 3. Các chức năng chính
 
-## 🚀 3. Hình ảnh các chức năng
+1. **Đăng nhập / Đăng xuất**
+   - Hỗ trợ phân quyền **Admin** và **Nhân viên**.
+   - Dữ liệu người dùng lưu trong Local Storage.
+
+2. **Quản lý kho**
+   - Hiển thị danh mục thuốc & vật tư (tên, hạn dùng, đơn vị, số lượng tồn).
+   - Cho phép **nhập kho** (admin trực tiếp nhập) hoặc **gửi yêu cầu nhập** (staff gửi để admin duyệt).
+   - Cho phép **xuất kho** với lý do rõ ràng.
+   - Tự động tính toán số lượng tồn, hiển thị cảnh báo:
+     - “Sắp hết hạn (≤30 ngày)”
+     - “Tồn thấp (<20 đơn vị)”
+
+3. **Phiếu yêu cầu nhập**
+   - Nhân viên gửi yêu cầu nhập kho (số lượng, ghi chú).
+   - Quản trị viên duyệt / từ chối phiếu.
+
+4. **Lịch sử nhập/xuất**
+   - Ghi lại toàn bộ giao dịch (ngày giờ, loại, lý do).
+   - Hiển thị theo dạng thẻ (Card) với biểu tượng mũi tên màu:
+     - 🟢 **Nhập kho**
+     - 🔴 **Xuất kho**
+
+5. **Trợ lý AI**
+   - Trả lời bằng ngôn ngữ tự nhiên tiếng Việt.
+   - Phân tích hành động WMS (stockInRequest, stockOut, quickReport...).
+   - Cập nhật dữ liệu **realtime** theo hành động.
+   - Nhận biết và tách biệt:
+     - Câu hỏi y tế (trả lời tự nhiên).
+     - Câu lệnh kho (thực thi hành động).
+
+---
+
+## 🧠 4. Giao diện ứng dụng
 
 <p align="center">
-  <img src="docs/project photo/1..png" alt="Ảnh 1" width="800"/>
+  <img src="docs/project photo/1..jpg" width="400"/>
 </p>
+<p align="center"><em>Đăng nhập hệ thống kho</em></p>
 
 <p align="center">
-  <em>Giao diện khi vào ứng dụng  </em>
+  <img src="docs/project photo/2..jpg" width="400"/>
 </p>
+<p align="center"><em>Tổng quan tồn kho & thống kê</em></p>
 
 <p align="center">
-  <img src="docs/project photo/2..png" alt="Ảnh 2" width="700"/>
+  <img src="docs/project photo/3..jpg" width="400"/>
 </p>
-<p align="center">
-  <em>Client đăng nhập </em>
-</p>
-
+<p align="center"><em>Giao diện kho: nhập/xuất và phiếu chờ duyệt</em></p>
 
 <p align="center">
-  <img src="docs/project photo/3..png" alt="Ảnh 3" width="500"/>
- 
+  <img src="docs/project photo/4..jpg" width="400"/>
 </p>
-<p align="center">
-  <em> Client đăng ký </em>
-</p>
+<p align="center"><em>Nhân viên gửi yêu cầu nhập kho</em></p>
 
 <p align="center">
-    <img src="docs/project photo/4..png" alt="Ảnh 4" width="450"/>
+  <img src="docs/project photo/5...jpg" width="400"/>
 </p>
-<p align="center">
-  <em> Giao diện sau khi đăng nhập </em>
-</p>
-<p align="center">
-    <img src="docs/project photo/5...png" alt="Ảnh 4" width="450"/>
-</p>
-<p align="center">
-  <em> Client lịch sử làm bài  </em>
-</p>
-<p align="center">
-    <img src="docs/project photo/6..png" alt="Ảnh 4" width="450"/>
-</p>
-<p align="center">
-  <em> Client chọn bộ đề   </em>
-</p>
-<p align="center">
-    <img src="docs/project photo/7..png" alt="Ảnh 4" width="450"/>
-</p>
-<p align="center">
-  <em> Giao diện khi bắt đầu làm   </em>
-</p>
-<p align="center">
-    <img src="docs/project photo/8..png" alt="Ảnh 4" width="450"/>
-</p>
-<p align="center">
-  <em> Giao diện khi hoàn thành xong bài   </em>
-</p>
+<p align="center"><em>Lịch sử nhập/xuất thuốc & vật tư</em></p>
 
-## 📝 4. Hướng dẫn cài đặt và sử dụng
+<p align="center">
+  <img src="docs/project photo/6..jpg" width="400"/>
+</p>
+<p align="center"><em>AI trả lời truy vấn y tế (ví dụ: “ốm cúm uống thuốc gì?”)</em></p>
+
+---
+
+## ⚙️ 5. Hướng dẫn cài đặt và chạy ứng dụng
 
 ### 🔧 Yêu cầu hệ thống
 
-- **Java Development Kit (JDK)**: Phiên bản 8 trở lên
-- **Hệ điều hành**: Windows, macOS, hoặc Linux
-- **Môi trường phát triển**: IDE (IntelliJ IDEA, Eclipse, VS Code) hoặc terminal/command prompt
-- **Bộ nhớ**: Tối thiểu 512MB RAM
-- **Dung lượng**: Khoảng 10MB cho mã nguồn và file thực thi
-- **Mạng**: Yêu cầu kết nối mạng nội bộ hoặc Internet để client và server giao tiếp qua TCP
+- **Flutter SDK:** >= 3.22  
+- **Dart SDK:** >= 3.3  
+- **Thiết bị:** Android 8+ / iOS 14+  
+- **Dung lượng:** ~50MB  
+- **Kết nối:** Có thể hoạt động offline, AI yêu cầu mạng nội bộ khi bật Ollama.
 
-### 📦 Cài đặt và triển khai
+---
 
-#### Bước 1: Chuẩn bị môi trường
+## 📦 Cài đặt
 
-1. **Kiểm tra Java**: Mở terminal/command prompt và chạy:
+### 🔧 Yêu cầu hệ thống
+- **Flutter SDK:** Phiên bản 3.22 trở lên  
+- **Dart SDK:** Phiên bản 3.3 trở lên  
+- **Thiết bị:** Android 8+ / iOS 14+  
+- **Dung lượng:** ~50MB  
+- **Mạng:** Có thể hoạt động offline; nếu dùng AI thì cần kết nối mạng nội bộ hoặc Internet để client và server giao tiếp qua TCP (ví dụ với Ollama Gateway)
 
+---
+
+### ⚙️ Các bước cài đặt và chạy ứng dụng
+
+1. **Clone mã nguồn:**
    ```bash
-   java -version
-   javac -version
-   ```
-   Đảm bảo cả hai lệnh đều hiển thị phiên bản Java 8 trở lên.
-
-2. **Tải mã nguồn**: Sao chép thư mục `UngDungTracNghiem_TCP` chứa các file:
-   - `QuizServer.java`
-   - `QuizClientSwing.java`
-   - `Question.java`
-   - `ResultsViewerSwing.java`
-
-#### Bước 2: Biên dịch mã nguồn
-
-1. **Mở terminal** và điều hướng đến thư mục chứa mã nguồn
-2. **Biên dịch các file Java**:
-
+   git clone https://github.com/yourname/wms_yte_xa_ai.git
+   cd wms_yte_xa_ai
+2. **Cài dependency:**
    ```bash
-   javac quiz/*.java
-   ```
-   Hoặc biên dịch từng file riêng lẻ:
+   flutter pub get
+3. **Chạy ứng dụng (debug mode):**
    ```bash
-    javac quiz/QuizServer.java
-    javac quiz/QuizClientSwing.java
-    javac quiz/Question.java
-    javac quiz/ResultsViewerSwing.java
-   ```
+   flutter run
+1. **Build APK (phiên bản phát hành):**
+   ```bash
+   flutter build apk --release
 
-3. **Kiểm tra kết quả**: Nếu biên dịch thành công, sẽ tạo ra các file `.class` tương ứng.
+## 💬 6. Hướng dẫn sử dụng
 
-#### Bước 3: Chạy ứng dụng
+### 🔑 Đăng nhập
+Ứng dụng có sẵn hai loại tài khoản:
 
-**Khởi động Server:**
-```bash
-java QuizServer.java
-```
-- Server sẽ khởi động trên port mặc định (5555)
-- Console sẽ hiển thị log khi có client kết nối.
-- Server sẽ tạo (nếu chưa có) file results.csv để lưu kết quả làm bài.
+| Vai trò | Tên đăng nhập | Mật khẩu | Quyền hạn |
+|----------|----------------|-----------|------------|
+| **Admin** | `admin` | `123456` | Nhập kho trực tiếp, duyệt yêu cầu nhân viên, xem toàn bộ lịch sử kho. |
+| **Nhân viên** | `ytx` | `123456` | Gửi yêu cầu nhập kho, xuất kho có lý do, xem thống kê và báo cáo tồn kho. |
 
-**Khởi động Client:**
-```bash
-java QuizClientSwing.java
-```
-- Mỗi client được mở trong một terminal/ứng dụng riêng.
-- Nhập Host, Port và Username trên giao diện Swing.
-- Client kết nối đến server và bắt đầu nhận câu hỏi trắc nghiệm.
-- Sau khi hoàn thành, điểm số và kết quả sẽ được hiển thị ngay trên giao diện.
-- Người dùng có thể chọn 📄 Xem kết quả để mở bảng thống kê kết quả từ file results.csv.
+---
 
-### 🚀 Sử dụng ứng dụng
+### 🏠 Tổng quan
+Sau khi đăng nhập, người dùng được chuyển đến **màn hình tổng quan**, tại đây hiển thị:
 
-1. **Kết nối**: Nhập Host, Port và Tên người dùng → bấm Kết nối để tham gia thi.
-2. **Làm bài**: Chọn đáp án cho từng câu hỏi và nhấn Next/Finish.
-3. **Phản hồi**: Sau mỗi câu, giao diện hiển thị kết quả đúng/sai và tiến độ.
-4. **Kết quả cuối cùng**: Khi hoàn thành, client hiển thị điểm số và thống kê.
-5. **Lưu trữ**: Server tự động lưu kết quả vào file results.csv.
-6. **Xem lại**: Người dùng có thể nhấn 📄 Xem kết quả để mở bảng thống kê từ file.
-7. **Ngắt kết nối**: Đóng cửa sổ client hoặc mất mạng sẽ tự động ngắt kết nối.
+- Danh mục thuốc & vật tư y tế trong kho.  
+- Tổng số lượng tồn (hiển thị rõ theo đơn vị).  
+- Danh sách **thuốc sắp hết hạn (≤ 30 ngày)** và **thuốc tồn thấp (< 20 đơn vị)**.  
+- Nút **“Xem tất cả”** để mở danh sách đầy đủ.
+
+---
+
+### 📦 Nhập kho / Xuất kho
+
+#### 🔹 Admin:
+- Có thể **nhập kho trực tiếp** bằng cách chọn thuốc, nhập số lượng và nhấn **“Nhập kho”**.  
+- Có thể **duyệt hoặc từ chối yêu cầu nhập** từ nhân viên (trong mục “Phiếu yêu cầu nhập”).  
+
+#### 🔹 Nhân viên:
+- Gửi **phiếu yêu cầu nhập kho**, ghi chú rõ ràng lý do hoặc ghi chú kèm theo.  
+- Thực hiện **xuất kho** phải điền “Lý do xuất” trước khi xác nhận.  
+- Tất cả thao tác đều được lưu lại trong phần **“Lịch sử nhập/xuất”**.
+
+---
+
+### 🤖 AI Trợ lý
+AI tích hợp trong hệ thống giúp tự động hóa thao tác và trả lời thông minh:
+
+- **Truy vấn báo cáo kho:**
+  - “Cho tôi xem tổng kho.”
+  - “Thuốc nào sắp hết hạn?”
+  - “Nhập 10 PARA500.”
+
+- **Hỏi đáp y tế thông thường:**
+  - “Bị cảm cúm nên uống thuốc gì?”
+  - “Thuốc hạ sốt dùng thế nào?”
+
+> ⚠️ *Lưu ý:* AI không thay thế tư vấn y tế. Các câu trả lời về sức khỏe chỉ mang tính tham khảo.
+
+---
+
+### 📁 Lưu trữ và đồng bộ
+- Dữ liệu kho (thuốc, phiếu, lịch sử, người dùng) được lưu cục bộ bằng `SharedPreferences`.
+- Khi khởi động ứng dụng, dữ liệu sẽ tự động được tải lại.
+- Các thao tác AI liên quan đến kho sẽ **đồng bộ tức thời** vào hệ thống.
+
+---
+
 
 ## 👜Thông tin cá nhân
 **Họ tên**: Nguyễn Hoàng Liêm.  
